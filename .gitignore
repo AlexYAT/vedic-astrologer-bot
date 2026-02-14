@@ -1,0 +1,30 @@
+# Переменные окружения (содержат секреты)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+
+# База данных
+*.db
+users.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Логи
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
