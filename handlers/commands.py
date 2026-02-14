@@ -7,6 +7,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 import assistant
 import db
 from handlers.common import (
+    format_assistant_response_for_telegram,
     get_main_menu_keyboard,
     get_topics_keyboard,
     get_topic_label,
@@ -49,7 +50,8 @@ async def ask_assistant_and_reply(
     try:
         await context.bot.send_chat_action(chat_id=chat.id, action="typing")
         response = assistant.send_message_and_get_response(user.id, user_message)
-        await update.message.reply_text(response)
+        response = format_assistant_response_for_telegram(response)
+        await update.message.reply_text(response, parse_mode="HTML")
     except Exception as e:
         logger.exception("Ошибка при обращении к ассистенту: %s", e)
         await update.message.reply_text(
@@ -122,7 +124,8 @@ async def topic_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     try:
         await context.bot.send_chat_action(chat_id=query.message.chat_id, action="typing")
         response = assistant.send_message_and_get_response(user.id, message)
-        await query.edit_message_text(response)
+        response = format_assistant_response_for_telegram(response)
+        await query.edit_message_text(response, parse_mode="HTML")
     except Exception as e:
         logger.exception("Ошибка при обращении к ассистенту: %s", e)
         await query.edit_message_text(

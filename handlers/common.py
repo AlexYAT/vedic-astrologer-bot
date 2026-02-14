@@ -1,9 +1,14 @@
-"""Общие функции: клавиатуры, валидация."""
+"""Общие функции: клавиатуры, валидация, форматирование ответов."""
 
+import html
 import re
 from datetime import datetime
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
+
+# Плейсхолдеры для конвертации Markdown → HTML (не содержат <>&)
+_PLACEHOLDER_BOLD_OPEN = "\uE000"
+_PLACEHOLDER_BOLD_CLOSE = "\uE001"
 
 # Тематики для /topics
 TOPICS = [
@@ -71,3 +76,53 @@ def get_topic_label(callback_data: str) -> str | None:
             if k == key:
                 return label
     return None
+
+
+def format_assistant_response_for_telegram(text: str) -> str:
+    """
+    Нормализует заголовки и переводит ответ ассистента в HTML для Telegram.
+    - Строки ### Заголовок и ## Заголовок → жирный заголовок (как **Заголовок:**).
+    - **жирный текст** → <b>жирный текст</b>.
+    - Экранирует & < > для parse_mode=HTML.
+    """
+    if not text or not text.strip():
+        return text
+
+    # 1) Нормализуем Markdown-заголовки: ### и ## в начале строки → **Заголовок:**
+    def normalize_header(match: re.Match) -> str:
+        title = match.group(1).strip()
+        if title and not title.endswith(":"):
+            title = title + ":"
+        return "**" + title + "**"
+
+    text = re.sub(r"^#{2,3}\s*(.+)$", normalize_header, text, flags=re.MULTILINE)
+
+    # 2) Заменяем **...** на плейсхолдеры (чтобы после escape не трогать теги)
+    parts = []
+    pos = 0
+    while True:
+        start = text.find("**", pos)
+        if start == -1:
+            parts.append(("text", text[pos:]))
+            break
+        parts.append(("text", text[pos:start]))
+        end = text.find("**", start + 2)
+        if end == -1:
+            parts.append(("text", text[start:]))
+            break
+        parts.append(("bold", text[start + 2 : end]))
+        pos = end + 2
+
+    # 3) Собираем строку: обычный текст экранируем, bold оборачиваем в плейсхолдеры
+    result_parts = []
+    for kind, content in parts:
+        if kind == "text":
+            result_parts.append(html.escape(content))
+        else:
+            result_parts.append(
+                _PLACEHOLDER_BOLD_OPEN + html.escape(content) + _PLACEHOLDER_BOLD_CLOSE
+            )
+
+    out = "".join(result_parts)
+    out = out.replace(_PLACEHOLDER_BOLD_OPEN, "<b>").replace(_PLACEHOLDER_BOLD_CLOSE, "</b>")
+    return out
