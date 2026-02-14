@@ -19,6 +19,7 @@ from handlers.commands import (
     contact_command,
     contact_update_handler,
     favorable_command,
+    menu_button_handler,
     setdata_command,
     topic_callback,
     topics_command,
@@ -60,6 +61,10 @@ def main() -> None:
         entry_points=[
             CommandHandler("start", start_command),
             CommandHandler("setdata", setdata_command),
+            MessageHandler(
+                filters.Regex("^Изменить данные$"),
+                setdata_command,
+            ),
         ],
         states={
             STATE_BIRTH_DATE: [
@@ -88,13 +93,21 @@ def main() -> None:
     application.add_handler(CommandHandler("topics", topics_command))
     application.add_handler(CommandHandler("favorable", favorable_command))
     application.add_handler(CommandHandler("contact", contact_command))
-    application.add_handler(CallbackQueryHandler(topic_callback, pattern=r"^topic_"))
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT
+            & ~filters.COMMAND
+            & filters.Regex("^(Завтра|Темы|Благоприятные дни|Контакты)$"),
+            menu_button_handler,
+        )
+    )
     application.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
             contact_update_handler,
         )
     )
+    application.add_handler(CallbackQueryHandler(topic_callback, pattern=r"^topic_"))
 
     logger.info("Бот запущен")
     application.run_polling(allowed_updates=Update.ALL_TYPES)

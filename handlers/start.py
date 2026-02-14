@@ -7,6 +7,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 import db
 from handlers.common import (
     get_main_menu_keyboard,
+    get_user_display_name,
     validate_birth_date,
     validate_birth_time,
     validate_email,
@@ -34,16 +35,18 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     user_id = user.id
     db.create_user(user_id)
 
+    display_name = get_user_display_name(user)
+
     if db.user_has_full_data(user_id):
         await update.message.reply_text(
-            f"Привет, {user.first_name or 'друг'}! Рад снова тебя видеть. "
+            f"Привет, {display_name}! Рад снова тебя видеть. "
             "Твои данные уже сохранены. Выбери команду из меню ниже:",
             reply_markup=get_main_menu_keyboard(),
         )
         return ConversationHandler.END
 
     await update.message.reply_text(
-        "Привет! Я — Ведический астролог, твой персональный советник по Джйотишу.\n\n"
+        f"Привет, {display_name}! Я — Ведический астролог, твой персональный советник по Джйотишу.\n\n"
         "Для персонализированных прогнозов мне нужны твои данные рождения.\n"
         "Введи дату рождения в формате ДД.ММ.ГГГГ (например, 15.03.1990):"
     )

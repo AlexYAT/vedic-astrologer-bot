@@ -2,6 +2,7 @@
 
 import logging
 import time
+from datetime import datetime
 from typing import Optional
 
 from openai import OpenAI
@@ -62,11 +63,15 @@ def send_message_and_get_response(user_id: int, message: str, timeout: int = 120
     assistant_id = _get_assistant_id()
     thread_id = get_or_create_thread(user_id)
 
+    # Добавляем текущую дату, чтобы ассистент строил прогнозы от сегодняшнего дня
+    today = datetime.now().strftime("%d.%m.%Y")
+    enhanced_message = f"Сегодня {today}. {message}"
+
     # Добавляем сообщение в тред
     client.beta.threads.messages.create(
         thread_id=thread_id,
         role="user",
-        content=message
+        content=enhanced_message
     )
 
     # Запускаем выполнение

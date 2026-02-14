@@ -11,6 +11,7 @@ from handlers.common import (
     get_main_menu_keyboard,
     get_topics_keyboard,
     get_topic_label,
+    MENU_TEXT_TO_COMMAND,
     validate_email,
 )
 from handlers.start import STATE_BIRTH_DATE
@@ -57,6 +58,23 @@ async def ask_assistant_and_reply(
         await update.message.reply_text(
             "К сожалению, произошла ошибка при получении ответа. Попробуй позже."
         )
+
+
+async def menu_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработка нажатий кнопок главного меню (русские подписи)."""
+    text = update.message.text if update.message else None
+    if not text or text not in MENU_TEXT_TO_COMMAND:
+        return
+    cmd = MENU_TEXT_TO_COMMAND[text]
+    if cmd == "tomorrow":
+        await tomorrow_command(update, context)
+    elif cmd == "topics":
+        await topics_command(update, context)
+    elif cmd == "favorable":
+        await favorable_command(update, context)
+    elif cmd == "contact":
+        await contact_command(update, context)
+    # "setdata" обрабатывается как entry_point ConversationHandler
 
 
 async def tomorrow_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -3,12 +3,45 @@
 import html
 import re
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
+
+if TYPE_CHECKING:
+    from telegram import User
 
 # Плейсхолдеры для конвертации Markdown → HTML (не содержат <>&)
 _PLACEHOLDER_BOLD_OPEN = "\uE000"
 _PLACEHOLDER_BOLD_CLOSE = "\uE001"
+
+# Кнопки главного меню: (подпись на русском, имя команды)
+MAIN_MENU_BUTTONS = [
+    ("Завтра", "tomorrow"),
+    ("Темы", "topics"),
+    ("Благоприятные дни", "favorable"),
+    ("Контакты", "contact"),
+    ("Изменить данные", "setdata"),
+]
+# Соответствие текста кнопки команде (для обработки нажатий)
+MENU_TEXT_TO_COMMAND = {label: cmd for label, cmd in MAIN_MENU_BUTTONS}
+
+def get_user_display_name(user: "User | None") -> str:
+    """
+    Имя пользователя для приветствия: first_name, при наличии — first_name + last_name.
+    Если определить нельзя — «друг».
+    """
+    if not user:
+        return "друг"
+    first = (user.first_name or "").strip()
+    last = (user.last_name or "").strip()
+    if first and last:
+        return f"{first} {last}"
+    if first:
+        return first
+    if user.username:
+        return f"@{user.username}"
+    return "друг"
+
 
 # Тематики для /topics
 TOPICS = [
@@ -49,11 +82,12 @@ def validate_email(text: str) -> bool:
 
 
 def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
-    """Клавиатура с основными командами."""
+    """Клавиатура с основными командами (подписи на русском)."""
+    labels = [label for label, _ in MAIN_MENU_BUTTONS]
     keyboard = [
-        [KeyboardButton("/tomorrow"), KeyboardButton("/topics")],
-        [KeyboardButton("/favorable"), KeyboardButton("/contact")],
-        [KeyboardButton("/setdata")],
+        [KeyboardButton(labels[0]), KeyboardButton(labels[1])],
+        [KeyboardButton(labels[2]), KeyboardButton(labels[3])],
+        [KeyboardButton(labels[4])],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
