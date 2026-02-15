@@ -9,6 +9,11 @@ from openai import OpenAI
 
 import db
 
+try:
+    from openai_safe import ASSISTANT_TIMEOUT
+except ImportError:
+    ASSISTANT_TIMEOUT = 15
+
 logger = logging.getLogger(__name__)
 
 _client: Optional[OpenAI] = None
@@ -16,11 +21,11 @@ _assistant_id: Optional[str] = None
 
 
 def init_assistant(api_key: str, assistant_id: str) -> None:
-    """Инициализация клиента OpenAI и ID ассистента."""
+    """Инициализация клиента OpenAI и ID ассистента. Таймаут HTTP-запросов = ASSISTANT_TIMEOUT с."""
     global _client, _assistant_id
-    _client = OpenAI(api_key=api_key)
+    _client = OpenAI(api_key=api_key, timeout=float(ASSISTANT_TIMEOUT))
     _assistant_id = assistant_id
-    logger.info("OpenAI Assistants API инициализирован")
+    logger.info("OpenAI Assistants API инициализирован (timeout=%s s)", ASSISTANT_TIMEOUT)
 
 
 def _get_client() -> OpenAI:

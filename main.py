@@ -15,29 +15,30 @@ from telegram.ext import (
 import assistant
 import config
 import db
+from version import __version__
 from handlers.commands import (
-    contact_command,
-    contact_update_handler,
+    cta_full_access_callback,
+    check_action_message,
     favorable_command,
     menu_button_handler,
+    menu_command,
+    my_data_command,
     setdata_command,
+    today_forecast_command,
     topic_callback,
     topics_command,
-    tomorrow_command,
+    tomorrow_forecast_command,
 )
 from handlers.start import (
     cancel,
     receive_birth_date,
     receive_birth_place,
     receive_birth_time,
-    receive_email,
-    receive_phone,
+    setdata_callback_entry,
     start_command,
     STATE_BIRTH_DATE,
     STATE_BIRTH_PLACE,
     STATE_BIRTH_TIME,
-    STATE_EMAIL,
-    STATE_PHONE,
 )
 
 logging.basicConfig(
@@ -65,6 +66,7 @@ def main() -> None:
                 filters.Regex("^Изменить данные$"),
                 setdata_command,
             ),
+            CallbackQueryHandler(setdata_callback_entry, pattern="^action_setdata$"),
         ],
         states={
             STATE_BIRTH_DATE: [
@@ -76,12 +78,6 @@ def main() -> None:
             STATE_BIRTH_PLACE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_birth_place),
             ],
-            STATE_PHONE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_phone),
-            ],
-            STATE_EMAIL: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_email),
-            ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
@@ -89,27 +85,29 @@ def main() -> None:
     application = Application.builder().token(token).build()
 
     application.add_handler(conv_handler)
-    application.add_handler(CommandHandler("tomorrow", tomorrow_command))
+    application.add_handler(CommandHandler("menu", menu_command))
+    application.add_handler(CommandHandler("tomorrow", tomorrow_forecast_command))
     application.add_handler(CommandHandler("topics", topics_command))
     application.add_handler(CommandHandler("favorable", favorable_command))
-    application.add_handler(CommandHandler("contact", contact_command))
     application.add_handler(
         MessageHandler(
             filters.TEXT
             & ~filters.COMMAND
-            & filters.Regex("^(Завтра|Темы|Благоприятные дни|Контакты)$"),
+            & filters.Regex(
+                "^(🔮 Сегодня|🔮 Завтра|❓ Проверить действие|📅 Удачный день|🎯 По теме|⚙️ Мои данные)$"
+            ),
             menu_button_handler,
         )
     )
     application.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            contact_update_handler,
-        )
+        MessageHandler(filters.TEXT & ~filters.COMMAND, check_action_message)
     )
     application.add_handler(CallbackQueryHandler(topic_callback, pattern=r"^topic_"))
+    application.add_handler(
+        CallbackQueryHandler(cta_full_access_callback, pattern="^cta_full_access$")
+    )
 
-    logger.info("Бот запущен")
+    logger.info("Vedic Astrologer Bot v%s starting...", __version__)
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 

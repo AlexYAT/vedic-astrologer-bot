@@ -14,16 +14,20 @@ if TYPE_CHECKING:
 _PLACEHOLDER_BOLD_OPEN = "\uE000"
 _PLACEHOLDER_BOLD_CLOSE = "\uE001"
 
-# Кнопки главного меню: (подпись на русском, имя команды)
+# Кнопки главного меню: (подпись, имя команды)
 MAIN_MENU_BUTTONS = [
-    ("Завтра", "tomorrow"),
-    ("Темы", "topics"),
-    ("Благоприятные дни", "favorable"),
-    ("Контакты", "contact"),
-    ("Изменить данные", "setdata"),
+    ("🔮 Сегодня", "forecast_today"),
+    ("🔮 Завтра", "forecast_tomorrow"),
+    ("❓ Проверить действие", "check_action"),
+    ("📅 Удачный день", "favorable"),
+    ("🎯 По теме", "topics"),
+    ("⚙️ Мои данные", "my_data"),
 ]
-# Соответствие текста кнопки команде (для обработки нажатий)
 MENU_TEXT_TO_COMMAND = {label: cmd for label, cmd in MAIN_MENU_BUTTONS}
+
+# CTA после каждого ответа ассистента
+CTA_TEXT = "Хотите больше точности? Доступно в полной версии"
+CTA_FULL_ACCESS_CALLBACK = "cta_full_access"
 
 def get_user_display_name(user: "User | None") -> str:
     """
@@ -82,14 +86,21 @@ def validate_email(text: str) -> bool:
 
 
 def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
-    """Клавиатура с основными командами (подписи на русском)."""
+    """Клавиатура главного меню (2+2+2): Сегодня/Завтра, Проверить/Удачный день, По теме/Мои данные."""
     labels = [label for label, _ in MAIN_MENU_BUTTONS]
     keyboard = [
         [KeyboardButton(labels[0]), KeyboardButton(labels[1])],
         [KeyboardButton(labels[2]), KeyboardButton(labels[3])],
-        [KeyboardButton(labels[4])],
+        [KeyboardButton(labels[4]), KeyboardButton(labels[5])],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def get_cta_keyboard() -> InlineKeyboardMarkup:
+    """Инлайн-кнопка CTA «Полный доступ» после ответа ассистента."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔓 Полный доступ", callback_data=CTA_FULL_ACCESS_CALLBACK)],
+    ])
 
 
 def get_topics_keyboard() -> InlineKeyboardMarkup:
