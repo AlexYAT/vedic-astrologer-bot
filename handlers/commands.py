@@ -1,6 +1,7 @@
 """Команды: Сегодня/Завтра, Проверить действие, Удачный день, По теме, Мои данные; /menu, /setdata."""
 
 import logging
+import time
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, ConversationHandler
 
@@ -53,6 +54,20 @@ async def _send_service_unavailable(
     )
 
 
+async def _send_run_timeout(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int | None = None
+) -> None:
+    """Ответ готовится дольше обычного: сообщение и меню (новый run не создаём)."""
+    target = chat_id or (update.effective_chat.id if update.effective_chat else None)
+    if target is None:
+        return
+    await context.bot.send_message(
+        chat_id=target,
+        text=openai_safe.MSG_RUN_TIMEOUT,
+        reply_markup=get_main_menu_keyboard(),
+    )
+
+
 async def _send_cta(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int | None = None) -> None:
     """Отправить CTA-блок (текст + кнопка «Полный доступ») после ответа ассистента."""
     target = chat_id or (update.effective_chat.id if update.effective_chat else None)
@@ -69,25 +84,48 @@ async def ask_assistant_and_reply(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
     user_message: str,
+    request_type: str,
+    request_text: str | None = None,
 ) -> None:
     """
     Отправить запрос ассистенту, показать ответ и CTA-блок.
     При timeout или ошибке API — сообщение о недоступности и меню.
+    Логирует запрос в user_requests (request_type, success, response_time_ms).
     """
     user = update.effective_user
     chat = update.effective_chat
     if not user or not chat:
         return
 
+    row = db.get_user(user.id)
+    internal_user_id = row.get("id")
+    if not internal_user_id:
+        internal_user_id = db.get_or_create_user(user.id).get("id")
+
     await context.bot.send_chat_action(chat_id=chat.id, action="typing")
+    start = time.perf_counter()
     response = await openai_safe.safe_openai_call(
-        lambda: assistant.send_message_and_get_response(
-            user.id, user_message, timeout=openai_safe.ASSISTANT_TIMEOUT
-        ),
-        timeout=openai_safe.ASSISTANT_TIMEOUT,
+        lambda: assistant.send_message_and_get_response(user.id, user_message),
+        timeout=openai_safe.ASSISTANT_RUN_WAIT_TIMEOUT + 5,
+        request_type=request_type,
+        telegram_id=user.id,
     )
+    elapsed_ms = int((time.perf_counter() - start) * 1000)
+    is_run_timeout = response is openai_safe.RUN_TIMEOUT_SENTINEL
+    success = 1 if (response is not None and not is_run_timeout) else 0
+    db.log_user_request(
+        internal_user_id,
+        request_type,
+        request_text=request_text,
+        success=success,
+        response_time_ms=elapsed_ms if response and not is_run_timeout else None,
+    )
+
     if response is None:
         await _send_service_unavailable(update, context, chat.id)
+        return
+    if is_run_timeout:
+        await _send_run_timeout(update, context, chat.id)
         return
     response = format_assistant_response_for_telegram(response)
     await update.message.reply_text(response, parse_mode="HTML")
@@ -148,7 +186,7 @@ async def today_forecast_command(update: Update, context: ContextTypes.DEFAULT_T
         return
     user_data = db.get_user(user.id)
     message = _build_day_forecast_prompt(user_data, for_today=True)
-    await ask_assistant_and_reply(update, context, message)
+    await ask_assistant_and_reply(update, context, message, request_type="today")
 
 
 async def tomorrow_forecast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -161,7 +199,7 @@ async def tomorrow_forecast_command(update: Update, context: ContextTypes.DEFAUL
         return
     user_data = db.get_user(user.id)
     message = _build_day_forecast_prompt(user_data, for_today=False)
-    await ask_assistant_and_reply(update, context, message)
+    await ask_assistant_and_reply(update, context, message, request_type="tomorrow")
 
 
 async def topics_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -200,6 +238,7 @@ async def topic_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     user_data = db.get_user(user.id)
+    internal_user_id = user_data.get("id") or db.get_or_create_user(user.id).get("id")
     data_str = format_user_data_for_prompt(user_data)
     message = (
         f"Данные пользователя:\n{data_str}\n\n"
@@ -207,15 +246,33 @@ async def topic_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
 
     await context.bot.send_chat_action(chat_id=query.message.chat_id, action="typing")
+    start = time.perf_counter()
     response = await openai_safe.safe_openai_call(
-        lambda: assistant.send_message_and_get_response(
-            user.id, message, timeout=openai_safe.ASSISTANT_TIMEOUT
-        ),
-        timeout=openai_safe.ASSISTANT_TIMEOUT,
+        lambda: assistant.send_message_and_get_response(user.id, message),
+        timeout=openai_safe.ASSISTANT_RUN_WAIT_TIMEOUT + 5,
+        request_type="topic",
+        telegram_id=user.id,
     )
+    elapsed_ms = int((time.perf_counter() - start) * 1000)
+    is_run_timeout = response is openai_safe.RUN_TIMEOUT_SENTINEL
+    success = 1 if (response is not None and not is_run_timeout) else 0
+    db.log_user_request(
+        internal_user_id,
+        "topic",
+        request_text=topic_label,
+        success=success,
+        response_time_ms=elapsed_ms if response and not is_run_timeout else None,
+    )
+
     if response is None:
         await query.edit_message_text(openai_safe.MSG_SERVICE_UNAVAILABLE)
         await _send_service_unavailable(update, context, query.message.chat_id)
+        return
+    if is_run_timeout:
+        await query.edit_message_text(
+            openai_safe.MSG_RUN_TIMEOUT,
+            reply_markup=get_main_menu_keyboard(),
+        )
         return
     response = format_assistant_response_for_telegram(response)
     await query.edit_message_text(response, parse_mode="HTML")
@@ -238,7 +295,7 @@ async def favorable_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         f"Данные пользователя:\n{data_str}\n\n"
         "Рекомендуй ближайшие благоприятные дни для важных начинаний с учётом его гороскопа."
     )
-    await ask_assistant_and_reply(update, context, message)
+    await ask_assistant_and_reply(update, context, message, request_type="favorable")
 
 
 async def check_action_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -294,7 +351,9 @@ async def check_action_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 f"Пользователь хочет проверить действие: «{action_clean}».\n"
                 "Дай краткий ответ: подходит ли день/момент для этого действия."
             )
-            await ask_assistant_and_reply(update, context, message)
+            await ask_assistant_and_reply(
+                update, context, message, request_type="check_action", request_text=action_clean
+            )
         except Exception as e:
             logger.exception("Ошибка при ответе после уточнения действия: %s", e)
             await _send_service_unavailable(update, context)
@@ -320,6 +379,8 @@ async def check_action_message(update: Update, context: ContextTypes.DEFAULT_TYP
     result = await openai_safe.safe_openai_call(
         lambda: action_validation.validate_action(action_text),
         timeout=openai_safe.VALIDATION_TIMEOUT,
+        request_type="check_action",
+        telegram_id=user.id,
     )
     if result is None:
         await _send_service_unavailable(update, context)
@@ -360,7 +421,9 @@ async def check_action_message(update: Update, context: ContextTypes.DEFAULT_TYP
         f"Пользователь хочет проверить действие: «{action_clean}».\n"
         "Дай краткий ответ: подходит ли день/момент для этого действия."
     )
-    await ask_assistant_and_reply(update, context, message)
+    await ask_assistant_and_reply(
+        update, context, message, request_type="check_action", request_text=action_clean
+    )
     await _send_action_menu(update, context)
 
 

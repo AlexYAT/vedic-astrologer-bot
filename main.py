@@ -12,6 +12,8 @@ from telegram.ext import (
     filters,
 )
 
+from utils.logging_setup import setup_logging
+
 import assistant
 import config
 import db
@@ -41,15 +43,12 @@ from handlers.start import (
     STATE_BIRTH_TIME,
 )
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
 logger = logging.getLogger(__name__)
 
 
 def main() -> None:
     """Запуск бота."""
+    setup_logging()
     token = config.get_telegram_token()
     api_key = config.get_openai_api_key()
     assistant_id = config.get_assistant_id()

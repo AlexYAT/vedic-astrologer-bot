@@ -91,13 +91,16 @@ async def receive_birth_place(update: Update, context: ContextTypes.DEFAULT_TYPE
         return ConversationHandler.END
 
     db.save_user_data(
-        user_id=user.id,
+        telegram_id=user.id,
         birth_date=context.user_data["birth_date"],
         birth_time=context.user_data["birth_time"],
         birth_place=context.user_data["birth_place"],
         phone=None,
         email=None,
     )
+    row = db.get_user(user.id)
+    if row and row.get("id"):
+        db.log_user_request(row["id"], "setdata", None, success=1, response_time_ms=None)
 
     await update.message.reply_text(
         "Данные успешно сохранены! Теперь ты можешь получать персонализированные прогнозы. "
