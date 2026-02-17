@@ -55,12 +55,18 @@ def _context_str(
     run_id: str | None = None,
     thread_id: str | None = None,
     elapsed_ms: int | None = None,
+    mode: str | None = None,
+    assistant_id_suffix: str | None = None,
 ) -> str:
     parts = []
     if request_type is not None:
         parts.append(f"request_type={request_type}")
     if telegram_id is not None:
         parts.append(f"telegram_id={telegram_id}")
+    if mode is not None:
+        parts.append(f"mode={mode}")
+    if assistant_id_suffix is not None:
+        parts.append(f"assistant_id=...{assistant_id_suffix}")
     if run_id is not None:
         parts.append(f"run_id={run_id}")
     if thread_id is not None:
@@ -75,6 +81,8 @@ async def safe_openai_call(
     timeout: int = ASSISTANT_RUN_WAIT_TIMEOUT,
     request_type: str | None = None,
     telegram_id: int | None = None,
+    mode: str | None = None,
+    assistant_id_suffix: str | None = None,
 ) -> T | None:
     """
     Выполняет синхронный вызов OpenAI в executor с таймаутом.
@@ -99,6 +107,8 @@ async def safe_openai_call(
             run_id=e.run_id,
             thread_id=e.thread_id,
             elapsed_ms=e.elapsed_ms,
+            mode=mode,
+            assistant_id_suffix=assistant_id_suffix,
         )
         logger.warning(
             "Run wait timeout (ответ готовится дольше). %s",
@@ -107,7 +117,13 @@ async def safe_openai_call(
         return RUN_TIMEOUT_SENTINEL  # type: ignore[return-value]
     except asyncio.TimeoutError as e:
         elapsed_ms = int((time.monotonic() - start) * 1000)
-        ctx = _context_str(request_type=request_type, telegram_id=telegram_id, elapsed_ms=elapsed_ms)
+        ctx = _context_str(
+            request_type=request_type,
+            telegram_id=telegram_id,
+            elapsed_ms=elapsed_ms,
+            mode=mode,
+            assistant_id_suffix=assistant_id_suffix,
+        )
         logger.error(
             "OpenAI call timeout after %s s. Увеличьте таймаут или проверьте сеть. %s%s",
             timeout,
@@ -117,7 +133,13 @@ async def safe_openai_call(
         return None
     except Exception as e:
         elapsed_ms = int((time.monotonic() - start) * 1000)
-        ctx = _context_str(request_type=request_type, telegram_id=telegram_id, elapsed_ms=elapsed_ms)
+        ctx = _context_str(
+            request_type=request_type,
+            telegram_id=telegram_id,
+            elapsed_ms=elapsed_ms,
+            mode=mode,
+            assistant_id_suffix=assistant_id_suffix,
+        )
         logger.error(
             "OpenAI call failed (см. причину ниже): %s%s",
             e,

@@ -3,10 +3,14 @@
 import logging
 import time
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal, Optional, Tuple
+
+# Тип возврата: (текст ответа, debug_info при DEBUG_MODE=1 иначе None)
+AssistantResponse = Tuple[str, Optional[dict]]
 
 from openai import OpenAI
 
+import config
 import db
 
 from openai_safe import ASSISTANT_RUN_WAIT_TIMEOUT, HTTP_TIMEOUT, RunTimeoutError
@@ -14,7 +18,10 @@ from openai_safe import ASSISTANT_RUN_WAIT_TIMEOUT, HTTP_TIMEOUT, RunTimeoutErro
 logger = logging.getLogger(__name__)
 
 _client: Optional[OpenAI] = None
-_assistant_id: Optional[str] = None
+_assistant_id_free: Optional[str] = None
+_assistant_id_pro: Optional[str] = None
+
+Mode = Literal["FREE", "PRO"]
 
 # Статусы run: активные (не создаём новый run) и терминальные
 _ACTIVE_RUN_STATUSES = ("queued", "in_progress", "requires_action")
@@ -22,13 +29,18 @@ _TERMINAL_STATUSES = ("completed", "failed", "cancelled", "expired")
 RunStatus = Literal["completed", "failed", "cancelled", "expired", "timeout"]
 
 
-def init_assistant(api_key: str, assistant_id: str) -> None:
-    """Инициализация клиента OpenAI и ID ассистента. HTTP timeout = HTTP_TIMEOUT с."""
-    global _client, _assistant_id
+def init_assistant(
+    api_key: str,
+    assistant_id_free: str,
+    assistant_id_pro: str,
+) -> None:
+    """Инициализация клиента OpenAI и ID ассистентов FREE/PRO. HTTP timeout = HTTP_TIMEOUT с."""
+    global _client, _assistant_id_free, _assistant_id_pro
     _client = OpenAI(api_key=api_key, timeout=float(HTTP_TIMEOUT))
-    _assistant_id = assistant_id
+    _assistant_id_free = assistant_id_free
+    _assistant_id_pro = assistant_id_pro
     logger.info(
-        "OpenAI Assistants API инициализирован (HTTP timeout=%s s, run wait=%s s)",
+        "OpenAI Assistants API инициализирован (FREE/PRO, HTTP timeout=%s s, run wait=%s s)",
         HTTP_TIMEOUT,
         ASSISTANT_RUN_WAIT_TIMEOUT,
     )
@@ -40,26 +52,82 @@ def _get_client() -> OpenAI:
     return _client
 
 
-def _get_assistant_id() -> str:
-    if _assistant_id is None:
-        raise RuntimeError("ASSISTANT_ID не задан. Вызовите init_assistant().")
-    return _assistant_id
+def _assistant_id_suffix(assistant_id: str) -> str:
+    """Последние 4 символа ID для логов (без полного ключа)."""
+    return assistant_id[-4:] if len(assistant_id) >= 4 else "****"
 
 
-def get_or_create_thread(user_id: int) -> str:
+def get_user_mode(telegram_id: int) -> Mode:
     """
-    Получить thread_id для пользователя или создать новый тред.
-    Сохраняет thread_id в БД при создании.
+    Эффективный режим пользователя для API: FREE или PRO.
+    При visibility=testers только пользователи из MODE_SWITCH_USERS могут иметь PRO; остальным — FREE.
+    Иначе — из БД (users.mode, учитывается pro_until).
     """
-    user = db.get_user(user_id)
-    if user and user.get("thread_id"):
-        return user["thread_id"]
+    visibility = config.get_mode_switch_visibility()
+    if visibility == "testers" and telegram_id not in config.get_mode_switch_users():
+        return "FREE"
+    stored = db.get_user_mode(telegram_id)
+    return "PRO" if stored == "pro" else "FREE"
+
+
+def get_user_mode_and_suffix(telegram_id: int) -> Tuple[Mode, str]:
+    """Режим и суффикс assistant_id для логов."""
+    mode = get_user_mode(telegram_id)
+    aid = _get_assistant_id_for_user(telegram_id)
+    return mode, _assistant_id_suffix(aid)
+
+
+def _get_assistant_id_for_user(telegram_id: int) -> str:
+    """ID ассистента для данного пользователя (FREE или PRO)."""
+    if _assistant_id_free is None or _assistant_id_pro is None:
+        raise RuntimeError("Assistant не инициализирован. Вызовите init_assistant().")
+    if get_user_mode(telegram_id) == "PRO":
+        return _assistant_id_pro
+    return _assistant_id_free
+
+
+def _wrap_response(
+    text: str,
+    mode: str,
+    assistant_id: str,
+    thread_id: str,
+    run_id: Optional[str],
+    key: Optional[str] = None,
+) -> AssistantResponse:
+    """Вернуть (text, debug_info) при DEBUG_MODE=1, иначе (text, None). При DEBUG_MODE в debug_info добавляется key."""
+    if config.get_debug_mode():
+        debug_info = {
+            "mode": mode.lower(),
+            "assistant_id": assistant_id,
+            "thread_id": thread_id,
+            "run_id": run_id or "",
+        }
+        if key is not None:
+            debug_info["key"] = key
+        return (text, debug_info)
+    return (text, None)
+
+
+def get_or_create_thread(user_id: int, mode: str, request_type: Optional[str] = None) -> str:
+    """
+    Получить thread_id для пользователя и ключа (mode:group) или создать новый тред.
+    key = "{mode}:{group}", где group = "check_action" при request_type=="check_action", иначе "forecast".
+    Сохраняет thread_id в user_threads.
+    """
+    mode = (mode or "free").lower().strip()
+    if mode not in ("free", "pro"):
+        mode = "free"
+    group = "check_action" if request_type == "check_action" else "forecast"
+    key = f"{mode}:{group}"
+    thread_id = db.get_thread_id(user_id, key)
+    if thread_id:
+        return thread_id
 
     client = _get_client()
     thread = client.beta.threads.create()
     thread_id = thread.id
-    db.update_user(user_id, thread_id=thread_id)
-    logger.info("Создан новый тред для user_id=%s: %s", user_id, thread_id)
+    db.set_thread_id(user_id, key, thread_id)
+    logger.info("Создан новый тред для user_id=%s key=%s: %s", user_id, key, thread_id)
     return thread_id
 
 
@@ -111,20 +179,37 @@ def send_message_and_get_response(
     user_id: int,
     message: str,
     timeout: Optional[int] = None,
-) -> str:
+    request_type: Optional[str] = None,
+) -> AssistantResponse:
     """
     Отправить сообщение в тред, при необходимости создать run, дождаться завершения и вернуть ответ.
     Не создаёт новый run, если уже есть активный (queued/in_progress/requires_action).
     При истечении ожидания run выбрасывает openai_safe.RunTimeoutError (run_id, thread_id, elapsed_ms).
 
     :param timeout: макс. время ожидания завершения run (с); по умолчанию ASSISTANT_RUN_WAIT_TIMEOUT
+    :param request_type: тип запроса для логов (today, tomorrow, check_action, topic, favorable)
+    :return: (текст ответа, debug_info при DEBUG_MODE=1 иначе None)
     """
     max_wait_s = timeout if timeout is not None else ASSISTANT_RUN_WAIT_TIMEOUT
     client = _get_client()
-    assistant_id = _get_assistant_id()
-    thread_id = get_or_create_thread(user_id)
+    assistant_id = _get_assistant_id_for_user(user_id)
+    mode = get_user_mode(user_id)
+    aid_suffix = _assistant_id_suffix(assistant_id)
+    thread_id = get_or_create_thread(user_id, mode.lower(), request_type)
+    group = "check_action" if request_type == "check_action" else "forecast"
+    thread_key = f"{mode.lower()}:{group}"
 
-    # Текущая дата для контекста
+    logger.info(
+        "request_type=%s telegram_id=%s mode=%s assistant_id=...%s thread_id=%s key=%s",
+        request_type or "?",
+        user_id,
+        mode,
+        aid_suffix,
+        thread_id,
+        thread_key,
+    )
+
+    # Текущая дата для контекста — всегда datetime.now() сервера в момент запроса
     today = datetime.now().strftime("%d.%m.%Y")
     enhanced_message = f"Сегодня {today}. {message}"
 
@@ -154,12 +239,15 @@ def send_message_and_get_response(
                 raise RunTimeoutError(run_id=run_id, thread_id=thread_id, elapsed_ms=elapsed_ms)
             if status == "completed":
                 logger.info(
-                    "Run completed (existing) thread_id=%s run_id=%s elapsed_ms=%s",
+                    "Run completed (existing) mode=%s assistant_id=...%s thread_id=%s run_id=%s elapsed_ms=%s",
+                    mode,
+                    aid_suffix,
                     thread_id,
                     run_id,
                     elapsed_ms,
                 )
-                return _get_last_assistant_message(client, thread_id)
+                text = _get_last_assistant_message(client, thread_id)
+                return _wrap_response(text, mode, assistant_id, thread_id, run_id, key=thread_key)
             if status == "failed":
                 run = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run_id)
                 err = getattr(run, "last_error", None) or "Неизвестная ошибка"
@@ -175,7 +263,8 @@ def send_message_and_get_response(
                 latest.id,
                 elapsed_ms,
             )
-            return _get_last_assistant_message(client, thread_id)
+            text = _get_last_assistant_message(client, thread_id)
+            return _wrap_response(text, mode, assistant_id, thread_id, latest.id, key=thread_key)
 
     # 2) Нет активного run; добавляем сообщение и создаём run
     client.beta.threads.messages.create(
@@ -183,6 +272,7 @@ def send_message_and_get_response(
         role="user",
         content=enhanced_message,
     )
+    logger.info("mode=%s assistant_id=...%s thread_id=%s", mode, aid_suffix, thread_id)
     run = client.beta.threads.runs.create(thread_id=thread_id, assistant_id=assistant_id)
     run_id = run.id
 
@@ -200,12 +290,15 @@ def send_message_and_get_response(
 
     if status == "completed":
         logger.info(
-            "Run completed thread_id=%s run_id=%s elapsed_ms=%s",
+            "Run completed mode=%s assistant_id=...%s thread_id=%s run_id=%s elapsed_ms=%s",
+            mode,
+            aid_suffix,
             thread_id,
             run_id,
             elapsed_ms,
         )
-        return _get_last_assistant_message(client, thread_id)
+        text = _get_last_assistant_message(client, thread_id)
+        return _wrap_response(text, mode, assistant_id, thread_id, run_id, key=thread_key)
 
     if status == "failed":
         run = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run_id)
