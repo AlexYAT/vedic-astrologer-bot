@@ -3,7 +3,8 @@
 import json
 import logging
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -593,12 +594,37 @@ def save_user_data(
 
 # --------------- Admin / статистика ---------------
 
+# Часовой пояс для отображения "Последняя активность" в /admin
+_ADMIN_DISPLAY_TZ = ZoneInfo("Europe/Paris")
+
+
+def _parse_created_at_as_utc(val: Any) -> Optional[datetime]:
+    """
+    Парсит created_at из БД (TEXT 'YYYY-MM-DD HH:MM:SS' или ISO).
+    SQLite хранит в UTC. Возвращает timezone-aware datetime (UTC) или None.
+    """
+    if val is None:
+        return None
+    s = str(val).strip()
+    if not s:
+        return None
+    s = s.replace("Z", "+00:00").split("+")[0].strip()
+    try:
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (ValueError, TypeError):
+        return None
+
 
 def get_admin_stats(exclude_telegram_ids: set[int]) -> dict[str, Any]:
     """
     Статистика для /admin: пользователи, активность, исключая exclude_telegram_ids (MODE_SWITCH_USERS).
     Возвращает: users_count, last_activity (DD.MM.YYYY HH:MM или "н/д"), last_activity_ago ("Xч Ym" или "н/д"),
-    active_24h (уникальных пользователей за 24ч), requests_24h (запросов за 24ч или "н/д").
+    active_24h, requests_24h, last_activity_source ("user_requests" или "users").
+    last_activity и last_activity_ago — из того же источника, что и requests_24h/active_24h: MAX(user_requests.created_at).
+    Fallback: если user_requests пустая/отсутствует — MAX(users.created_at).
     """
     result: dict[str, Any] = {
         "users_count": 0,
@@ -606,13 +632,15 @@ def get_admin_stats(exclude_telegram_ids: set[int]) -> dict[str, Any]:
         "last_activity_ago": "н/д",
         "active_24h": 0,
         "requests_24h": "н/д",
+        "last_activity_source": "users",
     }
     last_activity_dt: Optional[datetime] = None
+    placeholders = ",".join("?" * len(exclude_telegram_ids)) if exclude_telegram_ids else ""
+    params = list(exclude_telegram_ids) if exclude_telegram_ids else []
+
     try:
         with get_connection() as conn:
             if exclude_telegram_ids:
-                placeholders = ",".join("?" * len(exclude_telegram_ids))
-                params = list(exclude_telegram_ids)
                 cursor = conn.execute(
                     f"SELECT COUNT(*) FROM users WHERE telegram_id NOT IN ({placeholders})",
                     params,
@@ -622,31 +650,12 @@ def get_admin_stats(exclude_telegram_ids: set[int]) -> dict[str, Any]:
             row = cursor.fetchone()
             result["users_count"] = row[0] if row else 0
 
-            if exclude_telegram_ids:
-                params = list(exclude_telegram_ids)
-                cursor = conn.execute(
-                    """SELECT MAX(ur.created_at) FROM user_requests ur
-                       JOIN users u ON ur.user_id = u.id
-                       WHERE u.telegram_id NOT IN ({})""".format(placeholders),
-                    params,
-                )
-            else:
-                cursor = conn.execute("SELECT MAX(created_at) FROM user_requests")
-            row = cursor.fetchone()
-            val = row[0] if row and row[0] else None
-            if val:
-                try:
-                    last_activity_dt = datetime.fromisoformat(str(val).replace("Z", "+00:00").split("+")[0].strip())
-                    result["last_activity"] = last_activity_dt.strftime("%d.%m.%Y %H:%M")
-                except (ValueError, TypeError):
-                    result["last_activity"] = str(val) if val else "н/д"
-            else:
-                result["last_activity"] = "н/д"
-
             cursor = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='user_requests'"
             )
-            if cursor.fetchone():
+            has_ur_table = cursor.fetchone() is not None
+
+            if has_ur_table:
                 if exclude_telegram_ids:
                     cursor = conn.execute(
                         """SELECT COUNT(DISTINCT u.telegram_id), COUNT(*) FROM user_requests ur
@@ -666,7 +675,47 @@ def get_admin_stats(exclude_telegram_ids: set[int]) -> dict[str, Any]:
                 if row:
                     result["active_24h"] = row[0] or 0
                     result["requests_24h"] = row[1] or 0
-            else:
+                else:
+                    result["requests_24h"] = 0
+
+                if exclude_telegram_ids:
+                    cursor = conn.execute(
+                        """SELECT MAX(ur.created_at) FROM user_requests ur
+                           JOIN users u ON ur.user_id = u.id
+                           WHERE u.telegram_id NOT IN ({})""".format(placeholders),
+                        params,
+                    )
+                else:
+                    cursor = conn.execute(
+                        """SELECT MAX(ur.created_at) FROM user_requests ur JOIN users u ON ur.user_id = u.id"""
+                    )
+                row = cursor.fetchone()
+                val = row[0] if row and row[0] else None
+                if val:
+                    last_activity_dt = _parse_created_at_as_utc(val)
+                    if last_activity_dt:
+                        result["last_activity_source"] = "user_requests"
+                        local_dt = last_activity_dt.astimezone(_ADMIN_DISPLAY_TZ)
+                        result["last_activity"] = local_dt.strftime("%d.%m.%Y %H:%M")
+
+            if last_activity_dt is None:
+                result["last_activity_source"] = "users"
+                if exclude_telegram_ids:
+                    cursor = conn.execute(
+                        f"""SELECT MAX(created_at) FROM users WHERE telegram_id NOT IN ({placeholders})""",
+                        params,
+                    )
+                else:
+                    cursor = conn.execute("SELECT MAX(created_at) FROM users")
+                row = cursor.fetchone()
+                val = row[0] if row and row[0] else None
+                if val:
+                    last_activity_dt = _parse_created_at_as_utc(val)
+                    if last_activity_dt:
+                        local_dt = last_activity_dt.astimezone(_ADMIN_DISPLAY_TZ)
+                        result["last_activity"] = local_dt.strftime("%d.%m.%Y %H:%M")
+
+            if not has_ur_table:
                 result["requests_24h"] = "н/д"
     except Exception as e:
         logger.warning("get_admin_stats error: %s", e)
@@ -677,7 +726,8 @@ def get_admin_stats(exclude_telegram_ids: set[int]) -> dict[str, Any]:
 
     if last_activity_dt:
         try:
-            delta = datetime.now() - last_activity_dt
+            now_utc = datetime.now(timezone.utc)
+            delta = now_utc - last_activity_dt
             total_minutes = int(delta.total_seconds() / 60)
             hours = total_minutes // 60
             minutes = total_minutes % 60

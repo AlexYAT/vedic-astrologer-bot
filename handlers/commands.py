@@ -675,13 +675,15 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         active_24h = stats.get("active_24h", "н/д")
         requests_24h = stats.get("requests_24h", "н/д")
         last_activity_ago = stats.get("last_activity_ago") or "н/д"
+        last_activity_source = stats.get("last_activity_source") or "н/д"
         text = (
             "📊 Админ-панель (MVP)\n\n"
             f"Пользователей: {users_count}\n"
             f"Активных за 24 часа: {active_24h}\n"
             f"Запросов за 24 часа: {requests_24h}\n"
             f"Последняя активность: {last_activity}\n"
-            f"Прошло с последней активности: {last_activity_ago}"
+            f"Прошло с последней активности: {last_activity_ago}\n"
+            f"Источник last_activity: {last_activity_source}"
         )
         await update.message.reply_text(text)
     except Exception as e:
