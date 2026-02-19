@@ -20,6 +20,7 @@ import db
 from handlers import common as handlers_common
 from version import __version__
 from handlers.commands import (
+    admin_command,
     check_action_again_callback,
     check_action_menu_callback,
     check_action_message,
@@ -132,6 +133,7 @@ def main() -> None:
 
     application.add_handler(conv_handler)
     application.add_handler(survey_conv)
+    application.add_handler(CommandHandler("admin", admin_command))
     application.add_handler(CommandHandler("menu", menu_command))
     application.add_handler(CommandHandler("tomorrow", tomorrow_forecast_command))
     application.add_handler(CommandHandler("topics", topics_command))

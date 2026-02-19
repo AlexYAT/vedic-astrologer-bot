@@ -657,6 +657,32 @@ async def my_data_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await update.message.reply_text(text, reply_markup=keyboard)
 
 
+async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Команда /admin: доступна только MODE_SWITCH_USERS. MVP-статистика (пользователи, последняя активность), исключая тестовых."""
+    user = update.effective_user
+    if not user or not update.message:
+        return
+    admin_ids = config.get_mode_switch_users()
+    if user.id not in admin_ids:
+        await update.message.reply_text("Нет доступа.")
+        return
+    try:
+        stats = db.get_admin_stats(admin_ids)
+        users_count = stats.get("users_count")
+        last_activity = stats.get("last_activity") or "н/д"
+        if users_count is None:
+            users_count = "н/д"
+        text = (
+            "📊 Админ-панель (MVP)\n\n"
+            f"Пользователей: {users_count}\n"
+            f"Последняя активность: {last_activity}"
+        )
+        await update.message.reply_text(text)
+    except Exception as e:
+        logger.warning("admin_command error: %s", e)
+        await update.message.reply_text("Ошибка получения статистики.")
+
+
 async def setdata_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Повторный ввод или изменение всех данных. Запускает сценарий сбора данных."""
     user = update.effective_user

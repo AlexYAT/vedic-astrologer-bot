@@ -589,3 +589,53 @@ def save_user_data(
     """Сохранить данные рождения (совместимость с handlers/start)."""
     get_or_create_user(telegram_id)
     update_user_birth_data(telegram_id, birth_date, birth_time, birth_place, birth_time_unknown=birth_time_unknown)
+
+
+# --------------- Admin / статистика ---------------
+
+
+def get_admin_stats(exclude_telegram_ids: set[int]) -> dict[str, Any]:
+    """
+    Статистика для /admin: пользователи и последняя активность, исключая exclude_telegram_ids (MODE_SWITCH_USERS).
+    Возвращает: users_count (int), last_activity (str | None, формат DD.MM.YYYY HH:MM или "н/д").
+    """
+    result: dict[str, Any] = {"users_count": 0, "last_activity": None}
+    try:
+        with get_connection() as conn:
+            if exclude_telegram_ids:
+                placeholders = ",".join("?" * len(exclude_telegram_ids))
+                params = list(exclude_telegram_ids)
+                cursor = conn.execute(
+                    f"SELECT COUNT(*) FROM users WHERE telegram_id NOT IN ({placeholders})",
+                    params,
+                )
+            else:
+                cursor = conn.execute("SELECT COUNT(*) FROM users")
+            row = cursor.fetchone()
+            result["users_count"] = row[0] if row else 0
+
+            if exclude_telegram_ids:
+                placeholders = ",".join("?" * len(exclude_telegram_ids))
+                params = list(exclude_telegram_ids)
+                cursor = conn.execute(
+                    """SELECT MAX(ur.created_at) FROM user_requests ur
+                       JOIN users u ON ur.user_id = u.id
+                       WHERE u.telegram_id NOT IN ({})""".format(placeholders),
+                    params,
+                )
+            else:
+                cursor = conn.execute("SELECT MAX(created_at) FROM user_requests")
+            row = cursor.fetchone()
+            val = row[0] if row and row[0] else None
+            if val:
+                try:
+                    dt = datetime.fromisoformat(str(val).replace("Z", "+00:00").split("+")[0].strip())
+                    result["last_activity"] = dt.strftime("%d.%m.%Y %H:%M")
+                except (ValueError, TypeError):
+                    result["last_activity"] = str(val) if val else "н/д"
+            else:
+                result["last_activity"] = "н/д"
+    except Exception as e:
+        logger.warning("get_admin_stats error: %s", e)
+        result["last_activity"] = "н/д"
+    return result

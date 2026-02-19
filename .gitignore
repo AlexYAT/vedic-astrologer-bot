@@ -28,3 +28,6 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+# snapshots
+product/project_snapshot_*.md
