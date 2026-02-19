@@ -596,10 +596,18 @@ def save_user_data(
 
 def get_admin_stats(exclude_telegram_ids: set[int]) -> dict[str, Any]:
     """
-    Статистика для /admin: пользователи и последняя активность, исключая exclude_telegram_ids (MODE_SWITCH_USERS).
-    Возвращает: users_count (int), last_activity (str | None, формат DD.MM.YYYY HH:MM или "н/д").
+    Статистика для /admin: пользователи, активность, исключая exclude_telegram_ids (MODE_SWITCH_USERS).
+    Возвращает: users_count, last_activity (DD.MM.YYYY HH:MM или "н/д"), last_activity_ago ("Xч Ym" или "н/д"),
+    active_24h (уникальных пользователей за 24ч), requests_24h (запросов за 24ч или "н/д").
     """
-    result: dict[str, Any] = {"users_count": 0, "last_activity": None}
+    result: dict[str, Any] = {
+        "users_count": 0,
+        "last_activity": "н/д",
+        "last_activity_ago": "н/д",
+        "active_24h": 0,
+        "requests_24h": "н/д",
+    }
+    last_activity_dt: Optional[datetime] = None
     try:
         with get_connection() as conn:
             if exclude_telegram_ids:
@@ -615,7 +623,6 @@ def get_admin_stats(exclude_telegram_ids: set[int]) -> dict[str, Any]:
             result["users_count"] = row[0] if row else 0
 
             if exclude_telegram_ids:
-                placeholders = ",".join("?" * len(exclude_telegram_ids))
                 params = list(exclude_telegram_ids)
                 cursor = conn.execute(
                     """SELECT MAX(ur.created_at) FROM user_requests ur
@@ -629,13 +636,52 @@ def get_admin_stats(exclude_telegram_ids: set[int]) -> dict[str, Any]:
             val = row[0] if row and row[0] else None
             if val:
                 try:
-                    dt = datetime.fromisoformat(str(val).replace("Z", "+00:00").split("+")[0].strip())
-                    result["last_activity"] = dt.strftime("%d.%m.%Y %H:%M")
+                    last_activity_dt = datetime.fromisoformat(str(val).replace("Z", "+00:00").split("+")[0].strip())
+                    result["last_activity"] = last_activity_dt.strftime("%d.%m.%Y %H:%M")
                 except (ValueError, TypeError):
                     result["last_activity"] = str(val) if val else "н/д"
             else:
                 result["last_activity"] = "н/д"
+
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='user_requests'"
+            )
+            if cursor.fetchone():
+                if exclude_telegram_ids:
+                    cursor = conn.execute(
+                        """SELECT COUNT(DISTINCT u.telegram_id), COUNT(*) FROM user_requests ur
+                           JOIN users u ON ur.user_id = u.id
+                           WHERE u.telegram_id NOT IN ({}) AND ur.created_at >= datetime('now', '-24 hours')""".format(
+                            placeholders
+                        ),
+                        params,
+                    )
+                else:
+                    cursor = conn.execute(
+                        """SELECT COUNT(DISTINCT u.telegram_id), COUNT(*) FROM user_requests ur
+                           JOIN users u ON ur.user_id = u.id
+                           WHERE ur.created_at >= datetime('now', '-24 hours')"""
+                    )
+                row = cursor.fetchone()
+                if row:
+                    result["active_24h"] = row[0] or 0
+                    result["requests_24h"] = row[1] or 0
+            else:
+                result["requests_24h"] = "н/д"
     except Exception as e:
         logger.warning("get_admin_stats error: %s", e)
         result["last_activity"] = "н/д"
+        result["last_activity_ago"] = "н/д"
+        result["requests_24h"] = "н/д"
+        return result
+
+    if last_activity_dt:
+        try:
+            delta = datetime.now() - last_activity_dt
+            total_minutes = int(delta.total_seconds() / 60)
+            hours = total_minutes // 60
+            minutes = total_minutes % 60
+            result["last_activity_ago"] = f"{hours}ч {minutes}м"
+        except (TypeError, ValueError):
+            result["last_activity_ago"] = "н/д"
     return result
