@@ -4,6 +4,7 @@ import logging
 import time
 from datetime import datetime
 from typing import Literal, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 # Тип возврата: (текст ответа, debug_info при DEBUG_MODE=1 иначе None)
 AssistantResponse = Tuple[str, Optional[dict]]
@@ -209,8 +210,13 @@ def send_message_and_get_response(
         thread_key,
     )
 
-    # Текущая дата для контекста — всегда datetime.now() сервера в момент запроса
-    today = datetime.now().strftime("%d.%m.%Y")
+    # Текущая дата для контекста — timezone-aware, TZ_NAME (по умолчанию Asia/Novosibirsk)
+    tz_name = config.get_tz_name()
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("UTC")
+    today = datetime.now(tz).strftime("%d.%m.%Y")
     enhanced_message = f"Сегодня {today}. {message}"
 
     start = time.monotonic()

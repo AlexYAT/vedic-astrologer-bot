@@ -43,6 +43,7 @@ Telegram-бот «Ведический астролог» — персональ
 - `TELEGRAM_BOT_TOKEN` — токен бота (получить через [@BotFather](https://t.me/BotFather))
 - `OPENAI_API_KEY` — API-ключ OpenAI (platform.openai.com)
 - `ASSISTANT_ID` — ID ассистента OpenAI (создать в платформе OpenAI, использовать `asst_xxxx...`)
+- `TZ_NAME` — часовой пояс для локальной даты в ответах ассистента (IANA, напр. `Asia/Novosibirsk`). По умолчанию `Asia/Novosibirsk`
 
 ### Создание ассистента OpenAI
 

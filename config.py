@@ -129,3 +129,12 @@ def get_pro_test_users() -> frozenset[int]:
 def get_db_path() -> Path:
     """Получить путь к файлу базы данных."""
     return Path(__file__).resolve().parent / "users.db"
+
+
+def get_tz_name() -> str:
+    """
+    Часовой пояс для текущей даты в ответах (IANA, напр. Asia/Novosibirsk).
+    Из переменной окружения TZ_NAME. По умолчанию Asia/Novosibirsk.
+    """
+    raw = (os.getenv("TZ_NAME") or "").strip()
+    return raw if raw else "Asia/Novosibirsk"
